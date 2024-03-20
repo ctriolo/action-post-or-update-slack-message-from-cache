@@ -1,0 +1,83 @@
+name: "Post or Update Slack Message From Cache"
+description: "Post or Update Slack Message From Cache"
+branding:
+  icon: "check-square"
+  color: "green"
+
+inputs:
+  slack_bot_token:
+    description: "Slack bot token"
+    required: true
+  slack_channael_id:
+    description: "Slack channel id Ex. C0123456789"
+    required: true
+  slack_message_body:
+    description: "Slack post body, this will be posted if the post doesn't exist, and updated if it exists. Ex. 'This message has been updated.'"
+    required: true
+  slack_reply_body:
+    description: "If provided, this will be posted as a reply to the existing post"
+
+outputs:
+  slack_message_ts:
+    description: "Slack message timestamp"
+    value: ${{ steps.slack_message.outputs.ts }}
+
+runs:
+  using: "composite"
+  steps:
+
+    - name: Restore cache
+      uses: actions/cache/restore@v4
+      id: restore-cache
+      with:
+        path: |
+          ${{ github.workspace }}/slack_message_ts.txt
+        key: slack-message-${{ github.event.pull_request.number || github.sha }}
+
+    - name: Output slack_message_ts
+      if: steps.restore-cache.outputs.cache-hit == 'true'
+      id: get-prev-posts
+      run: |
+        cd "$GITHUB_WORKSPACE"
+        { echo "slack_message_ts=$(cat slack_message_ts.txt)"; } >> "$GITHUB_OUTPUT"
+
+    - name: Post or update slack message
+      id: slack_message
+      uses: slackapi/slack-github-action@v1.25.0
+      env:
+        SLACK_BOT_TOKEN: ${{inputs.slack_bot_token}}
+      with:
+        update-ts: ${{ steps.get-prev-posts.outputs.slack_message_ts }}
+        channel-id: ${{inputs.slack_channel_id}}
+        slack-message: ${{inputs.slack_message_body}}
+
+    - name: Post slack update reply
+      uses: slackapi/slack-github-action@v1.25.0
+      # only post update message on cache hit and a reply body is provided
+      if: steps.restore-cache.outputs.cache-hit == 'true' && inputs.slack_reply_body
+      env:
+        SLACK_BOT_TOKEN: ${{inputs.slack_bot_token}}
+      with:
+        channel-id: ${{inputs.slack_channel_id}}
+        payload: |
+          {
+            "text": "${{inputs.slack_reply_body}}"
+            "thread_ts": "${{ steps.get-prev-posts.outputs.slack_message_ts }}"
+          }
+
+    - name: Save slack_message_ts.txt
+      env:
+        SLACK_MESSAGE_TS: ${{ steps.slack_message.outputs.ts }}
+      run: |
+        cd "$GITHUB_WORKSPACE"
+        echo "$GITHUB_WORKSPACE"
+        echo "$SLACK_MESSAGE_TS" > slack_message_ts.txt
+
+    - name: Save cache
+      # should save the cache if we didn't hit the cache
+      if: steps.restore-cache.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v4
+      with:
+        key: slack-message-${{ github.event.pull_request.number || github.sha }}
+        path: |
+          ${{ github.workspace }}/slack_message_ts.txt
